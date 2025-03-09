@@ -8,20 +8,13 @@ class CombinedFootballBettingModel:
         self.root.title("Odds Apex")
         self.create_widgets()
         # History maintained for potential future use
-        # Now tracking in-game xG, corners, and opposition box touches
         self.history = {
             "home_xg": [],
             "away_xg": [],
             "home_sot": [],
             "away_sot": [],
             "home_possession": [],
-            "away_possession": [],
-            "in_game_home_xg": [],
-            "in_game_away_xg": [],
-            "home_corners": [],
-            "away_corners": [],
-            "home_op_box_touches": [],
-            "away_op_box_touches": []
+            "away_possession": []
         }
         self.history_length = 10  # last 10 updates
 
@@ -107,22 +100,10 @@ class CombinedFootballBettingModel:
             "home_sot": [],
             "away_sot": [],
             "home_possession": [],
-            "away_possession": [],
-            "in_game_home_xg": [],
-            "in_game_away_xg": [],
-            "home_corners": [],
-            "away_corners": [],
-            "home_op_box_touches": [],
-            "away_op_box_touches": []
+            "away_possession": []
         }
 
-    def update_history(self, key, value):
-        if key not in self.history:
-            self.history[key] = []
-        if len(self.history[key]) >= self.history_length:
-            self.history[key].pop(0)
-        self.history[key].append(value)
-
+    # ----- Bayesian Predictive Goal Probability -----
     def bayesian_goal_probability(self, expected_lambda, k, r=3):
         """
         Bayesian predictive probability for scoring k goals.
@@ -147,31 +128,39 @@ class CombinedFootballBettingModel:
         return adjusted_lambda
 
     def adjust_xg_for_scoreline(self, home_goals, away_goals, lambda_home, lambda_away, elapsed_minutes):
-        """
-        Adjust the expected goals (lambda) based on the current scoreline.
-        Now, regardless of a one-goal difference, if a team is trailing their lambda is penalized.
-        In addition, if more than 75 minutes have elapsed, the penalty for the trailing team is increased.
-        """
         goal_diff = home_goals - away_goals
-
-        # Baseline adjustment: if a team is trailing, penalize their xG.
-        if goal_diff < 0:  # home trailing
+        if goal_diff == 1:
             lambda_home *= 0.9
-            lambda_away *= 1.1
-        elif goal_diff > 0:  # away trailing
-            lambda_home *= 1.1
+            lambda_away *= 1.2
+        elif goal_diff == -1:
+            lambda_home *= 1.2
             lambda_away *= 0.9
-
-        # Late-game adjustment: apply extra penalty if time > 75 minutes.
-        if elapsed_minutes > 75:
-            if goal_diff < 0:  # home trailing
-                lambda_home *= 0.95
-                lambda_away *= 1.05
-            elif goal_diff > 0:  # away trailing
-                lambda_home *= 1.05
-                lambda_away *= 0.95
-
+        elif abs(goal_diff) >= 2:
+            if goal_diff > 0:
+                lambda_home *= 0.8
+                lambda_away *= 1.3
+            else:
+                lambda_home *= 0.8
+                lambda_away *= 0.8
+        if elapsed_minutes > 75 and abs(goal_diff) >= 1:
+            if goal_diff > 0:
+                lambda_home *= 0.85
+                lambda_away *= 1.15
+            else:
+                lambda_home *= 1.15
+                lambda_away *= 0.85
         return lambda_home, lambda_away
+
+    def update_history(self, key, value):
+        if key not in self.history:
+            self.history[key] = []
+        if len(self.history[key]) >= self.history_length:
+            self.history[key].pop(0)
+        self.history[key].append(value)
+
+    def dynamic_kelly(self, edge):
+        kelly_fraction = 0.25 * edge
+        return max(0, kelly_fraction)
 
     def dynamic_expected_lambda(self, team='home'):
         """
@@ -182,50 +171,6 @@ class CombinedFootballBettingModel:
         if self.history[key]:
             return sum(self.history[key]) / len(self.history[key])
         return 1.0  # default value if no history
-
-    def dynamic_momentum(self, team, current_in_game_xg, current_possession, current_sot, current_touches, current_corners):
-        """
-        Calculate a momentum factor for the team based on in-play metrics.
-        For each metric, the ratio of the current value to the historical average is computed.
-        The average of these (offset by 1) yields a momentum factor: positive values indicate improving performance.
-        """
-        # Map metric names to the corresponding history keys
-        keys = {
-            "in_game_xg": f"in_game_{team}_xg",
-            "possession": f"{team}_possession",
-            "sot": f"{team}_sot",
-            "touches": f"{team}_op_box_touches",
-            "corners": f"{team}_corners"
-        }
-        current_values = {
-            "in_game_xg": current_in_game_xg,
-            "possession": current_possession,
-            "sot": current_sot,
-            "touches": current_touches,
-            "corners": current_corners
-        }
-        momentum_factors = []
-        for metric in current_values:
-            key = keys[metric]
-            hist = self.history.get(key, [])
-            if hist:
-                avg = sum(hist) / len(hist)
-                # Avoid division by zero
-                ratio = current_values[metric] / avg if avg != 0 else 1
-            else:
-                ratio = 1
-            # Subtract 1 to center around zero (0 means average; >0 means above average)
-            momentum_factors.append(ratio - 1)
-        # Average the momentum factors
-        momentum = sum(momentum_factors) / len(momentum_factors)
-        return momentum
-
-    def dynamic_kelly(self, edge):
-        """
-        Calculate a scaled Kelly fraction.
-        """
-        kelly_fraction = 0.25 * edge
-        return max(0, kelly_fraction)
 
     # ----- Combined Calculation -----
     def calculate_all(self):
@@ -262,13 +207,6 @@ class CombinedFootballBettingModel:
         self.update_history("away_sot", away_sot)
         self.update_history("home_possession", home_possession)
         self.update_history("away_possession", away_possession)
-        # New in-play metrics
-        self.update_history("in_game_home_xg", in_game_home_xg)
-        self.update_history("in_game_away_xg", in_game_away_xg)
-        self.update_history("home_corners", home_corners)
-        self.update_history("away_corners", away_corners)
-        self.update_history("home_op_box_touches", home_op_box_touches)
-        self.update_history("away_op_box_touches", away_op_box_touches)
 
         remaining_minutes = 90 - elapsed_minutes
         fraction_remaining = max(0.0, remaining_minutes / 90.0)
@@ -304,7 +242,7 @@ class CombinedFootballBettingModel:
         lambda_home *= 1 + ((home_corners - 4) / 50) * fraction_remaining
         lambda_away *= 1 + ((away_corners - 4) / 50) * fraction_remaining
 
-        # Remove the lower bound on next-goal probability; cap only at 90%
+        # Next Goal probability calculation – can now drop below 30%
         goal_probability = 1 - exp(-((lambda_home + lambda_away) * (remaining_minutes / 45.0)))
         goal_probability = min(0.90, goal_probability)
 
@@ -354,13 +292,10 @@ class CombinedFootballBettingModel:
         lambda_home_mo *= 1 + ((home_corners - 4) / 50) * fraction_remaining
         lambda_away_mo *= 1 + ((away_corners - 4) / 50) * fraction_remaining
 
-        # --- Dynamic Bayesian Updating using Memory with Momentum ---
-        momentum_home = self.dynamic_momentum('home', in_game_home_xg, home_possession, home_sot, home_op_box_touches, home_corners)
-        momentum_away = self.dynamic_momentum('away', in_game_away_xg, away_possession, away_sot, away_op_box_touches, away_corners)
-
-        # Blend current lambda with the historical average and adjust for momentum.
-        dynamic_lambda_home = ((lambda_home_mo + self.dynamic_expected_lambda('home')) / 2) * (1 + momentum_home)
-        dynamic_lambda_away = ((lambda_away_mo + self.dynamic_expected_lambda('away')) / 2) * (1 + momentum_away)
+        # --- Dynamic Bayesian Updating using Memory ---
+        # Blend the current in-play lambda with the dynamic (historical) expected lambda.
+        dynamic_lambda_home = (lambda_home_mo + self.dynamic_expected_lambda('home')) / 2
+        dynamic_lambda_away = (lambda_away_mo + self.dynamic_expected_lambda('away')) / 2
 
         home_win_prob = 0
         away_win_prob = 0
@@ -378,30 +313,52 @@ class CombinedFootballBettingModel:
                 else:
                     draw_prob += prob
 
-        # --- HOT FIX: Adjust draw probability ---
-        draw_prob *= 1.42  # Increase draw probability by ~42%
+        if (home_win_prob + away_win_prob + draw_prob) > 0:
+            home_win_prob /= (home_win_prob + away_win_prob + draw_prob)
+            away_win_prob /= (home_win_prob + away_win_prob + draw_prob)
+            draw_prob /= (home_win_prob + away_win_prob + draw_prob)
 
-        # Now re-normalize the probabilities
-        total = home_win_prob + away_win_prob + draw_prob
-        if total > 0:
-            home_win_prob /= total
-            away_win_prob /= total
-            draw_prob /= total
+        # --- Blend Market Sentiment ---
+        # Compute model probabilities from our calculation:
+        model_home_prob = home_win_prob
+        model_draw_prob = draw_prob
+        model_away_prob = away_win_prob
 
-        fair_odds_home = 1 / home_win_prob if home_win_prob > 0 else float('inf')
-        fair_odds_draw = 1 / draw_prob if draw_prob > 0 else float('inf')
-        fair_odds_away = 1 / away_win_prob if away_win_prob > 0 else float('inf')
+        # Compute market implied probabilities from live odds:
+        market_home_prob = 1 / live_odds_home if live_odds_home > 0 else 0
+        market_draw_prob = 1 / live_odds_draw if live_odds_draw > 0 else 0
+        market_away_prob = 1 / live_odds_away if live_odds_away > 0 else 0
+        total_market = market_home_prob + market_draw_prob + market_away_prob
+        if total_market > 0:
+            market_home_prob /= total_market
+            market_draw_prob /= total_market
+            market_away_prob /= total_market
+
+        # Blend with weight: 70% model, 30% market
+        blend_weight = 0.7
+        final_home_prob = blend_weight * model_home_prob + (1 - blend_weight) * market_home_prob
+        final_draw_prob = blend_weight * model_draw_prob + (1 - blend_weight) * market_draw_prob
+        final_away_prob = blend_weight * model_away_prob + (1 - blend_weight) * market_away_prob
+        total_final = final_home_prob + final_draw_prob + final_away_prob
+        if total_final > 0:
+            final_home_prob /= total_final
+            final_draw_prob /= total_final
+            final_away_prob /= total_final
+
+        fair_odds_home = 1 / final_home_prob if final_home_prob > 0 else float('inf')
+        fair_odds_draw = 1 / final_draw_prob if final_draw_prob > 0 else float('inf')
+        fair_odds_away = 1 / final_away_prob if final_away_prob > 0 else float('inf')
 
         lines_mo = []
         lines_mo.append("--- Match Odds Calculation ---")
         lines_mo.append(f"Fair Odds - Home: {fair_odds_home:.2f}, Draw: {fair_odds_draw:.2f}, Away: {fair_odds_away:.2f}")
         lines_mo.append(f"Live Odds - Home: {live_odds_home:.2f}, Draw: {live_odds_draw:.2f}, Away: {live_odds_away:.2f}")
 
-        # ----- Betting Logic with 10% Cap -----
+        # Local function to ensure Kelly stake does not exceed 10% of account.
         def clamp_to_10pct(value):
-            return min(value, account_balance * 0.1)
+            return min(value, account_balance * 0.10)
 
-        # HOME
+        # Betting decisions for Home
         if fair_odds_home > live_odds_home:
             edge = (fair_odds_home - live_odds_home) / fair_odds_home
             liability = account_balance * self.dynamic_kelly(edge)
@@ -417,7 +374,7 @@ class CombinedFootballBettingModel:
         else:
             lines_mo.append("Home: No clear edge.")
 
-        # DRAW
+        # Betting decisions for Draw
         if fair_odds_draw > live_odds_draw:
             edge = (fair_odds_draw - live_odds_draw) / fair_odds_draw
             liability = account_balance * self.dynamic_kelly(edge)
@@ -433,7 +390,7 @@ class CombinedFootballBettingModel:
         else:
             lines_mo.append("Draw: No clear edge.")
 
-        # AWAY
+        # Betting decisions for Away
         if fair_odds_away > live_odds_away:
             edge = (fair_odds_away - live_odds_away) / fair_odds_away
             liability = account_balance * self.dynamic_kelly(edge)
