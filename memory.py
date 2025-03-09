@@ -8,7 +8,7 @@ class CombinedFootballBettingModel:
         self.root.title("Odds Apex")
         self.create_widgets()
         # History maintained for potential future use
-        # Now also tracking in-game xG, corners, and opposition box touches
+        # Now tracking in-game xG, corners, and opposition box touches
         self.history = {
             "home_xg": [],
             "away_xg": [],
@@ -147,27 +147,30 @@ class CombinedFootballBettingModel:
         return adjusted_lambda
 
     def adjust_xg_for_scoreline(self, home_goals, away_goals, lambda_home, lambda_away, elapsed_minutes):
+        """
+        Adjust the expected goals (lambda) based on the current scoreline.
+        Now, regardless of a one-goal difference, if a team is trailing their lambda is penalized.
+        In addition, if more than 75 minutes have elapsed, the penalty for the trailing team is increased.
+        """
         goal_diff = home_goals - away_goals
-        if goal_diff == 1:
+
+        # Baseline adjustment: if a team is trailing, penalize their xG.
+        if goal_diff < 0:  # home trailing
             lambda_home *= 0.9
-            lambda_away *= 1.2
-        elif goal_diff == -1:
-            lambda_home *= 1.2
+            lambda_away *= 1.1
+        elif goal_diff > 0:  # away trailing
+            lambda_home *= 1.1
             lambda_away *= 0.9
-        elif abs(goal_diff) >= 2:
-            if goal_diff > 0:
-                lambda_home *= 0.8
-                lambda_away *= 1.3
-            else:
-                lambda_home *= 0.8
-                lambda_away *= 0.8
-        if elapsed_minutes > 75 and abs(goal_diff) >= 1:
-            if goal_diff > 0:
-                lambda_home *= 0.85
-                lambda_away *= 1.15
-            else:
-                lambda_home *= 1.15
-                lambda_away *= 0.85
+
+        # Late-game adjustment: apply extra penalty if time > 75 minutes.
+        if elapsed_minutes > 75:
+            if goal_diff < 0:  # home trailing
+                lambda_home *= 0.95
+                lambda_away *= 1.05
+            elif goal_diff > 0:  # away trailing
+                lambda_home *= 1.05
+                lambda_away *= 0.95
+
         return lambda_home, lambda_away
 
     def dynamic_expected_lambda(self, team='home'):
@@ -218,6 +221,9 @@ class CombinedFootballBettingModel:
         return momentum
 
     def dynamic_kelly(self, edge):
+        """
+        Calculate a scaled Kelly fraction.
+        """
         kelly_fraction = 0.25 * edge
         return max(0, kelly_fraction)
 
@@ -298,8 +304,9 @@ class CombinedFootballBettingModel:
         lambda_home *= 1 + ((home_corners - 4) / 50) * fraction_remaining
         lambda_away *= 1 + ((away_corners - 4) / 50) * fraction_remaining
 
+        # Remove the lower bound on next-goal probability; cap only at 90%
         goal_probability = 1 - exp(-((lambda_home + lambda_away) * (remaining_minutes / 45.0)))
-        goal_probability = max(0.30, min(0.90, goal_probability))
+        goal_probability = min(0.90, goal_probability)
 
         if goal_probability < 0.40:
             level = "Low"
@@ -348,7 +355,6 @@ class CombinedFootballBettingModel:
         lambda_away_mo *= 1 + ((away_corners - 4) / 50) * fraction_remaining
 
         # --- Dynamic Bayesian Updating using Memory with Momentum ---
-        # Compute momentum factors using the in-play metrics history.
         momentum_home = self.dynamic_momentum('home', in_game_home_xg, home_possession, home_sot, home_op_box_touches, home_corners)
         momentum_away = self.dynamic_momentum('away', in_game_away_xg, away_possession, away_sot, away_op_box_touches, away_corners)
 
@@ -372,6 +378,10 @@ class CombinedFootballBettingModel:
                 else:
                     draw_prob += prob
 
+        # --- HOT FIX: Adjust draw probability ---
+        draw_prob *= 1.42  # Increase draw probability by ~42%
+
+        # Now re-normalize the probabilities
         total = home_win_prob + away_win_prob + draw_prob
         if total > 0:
             home_win_prob /= total
@@ -387,40 +397,53 @@ class CombinedFootballBettingModel:
         lines_mo.append(f"Fair Odds - Home: {fair_odds_home:.2f}, Draw: {fair_odds_draw:.2f}, Away: {fair_odds_away:.2f}")
         lines_mo.append(f"Live Odds - Home: {live_odds_home:.2f}, Draw: {live_odds_draw:.2f}, Away: {live_odds_away:.2f}")
 
+        # ----- Betting Logic with 10% Cap -----
+        def clamp_to_10pct(value):
+            return min(value, account_balance * 0.1)
+
+        # HOME
         if fair_odds_home > live_odds_home:
             edge = (fair_odds_home - live_odds_home) / fair_odds_home
             liability = account_balance * self.dynamic_kelly(edge)
+            liability = clamp_to_10pct(liability)
             lay_stake = liability / (live_odds_home - 1) if (live_odds_home - 1) > 0 else 0
             lines_mo.append(f"Lay Home: Edge: {edge:.2%}, Liability: {liability:.2f}, Lay Stake: {lay_stake:.2f}")
         elif fair_odds_home < live_odds_home:
             edge = (live_odds_home - fair_odds_home) / fair_odds_home
             stake = account_balance * self.dynamic_kelly(edge)
+            stake = clamp_to_10pct(stake)
             profit = stake * (live_odds_home - 1)
             lines_mo.append(f"Back Home: Edge: {edge:.2%}, Stake: {stake:.2f}, Profit: {profit:.2f}")
         else:
             lines_mo.append("Home: No clear edge.")
 
+        # DRAW
         if fair_odds_draw > live_odds_draw:
             edge = (fair_odds_draw - live_odds_draw) / fair_odds_draw
             liability = account_balance * self.dynamic_kelly(edge)
+            liability = clamp_to_10pct(liability)
             lay_stake = liability / (live_odds_draw - 1) if (live_odds_draw - 1) > 0 else 0
             lines_mo.append(f"Lay Draw: Edge: {edge:.2%}, Liability: {liability:.2f}, Lay Stake: {lay_stake:.2f}")
         elif fair_odds_draw < live_odds_draw:
             edge = (live_odds_draw - fair_odds_draw) / fair_odds_draw
             stake = account_balance * self.dynamic_kelly(edge)
+            stake = clamp_to_10pct(stake)
             profit = stake * (live_odds_draw - 1)
             lines_mo.append(f"Back Draw: Edge: {edge:.2%}, Stake: {stake:.2f}, Profit: {profit:.2f}")
         else:
             lines_mo.append("Draw: No clear edge.")
 
+        # AWAY
         if fair_odds_away > live_odds_away:
             edge = (fair_odds_away - live_odds_away) / fair_odds_away
             liability = account_balance * self.dynamic_kelly(edge)
+            liability = clamp_to_10pct(liability)
             lay_stake = liability / (live_odds_away - 1) if (live_odds_away - 1) > 0 else 0
             lines_mo.append(f"Lay Away: Edge: {edge:.2%}, Liability: {liability:.2f}, Lay Stake: {lay_stake:.2f}")
         elif fair_odds_away < live_odds_away:
             edge = (live_odds_away - fair_odds_away) / fair_odds_away
             stake = account_balance * self.dynamic_kelly(edge)
+            stake = clamp_to_10pct(stake)
             profit = stake * (live_odds_away - 1)
             lines_mo.append(f"Back Away: Edge: {edge:.2%}, Stake: {stake:.2f}, Profit: {profit:.2f}")
         else:
