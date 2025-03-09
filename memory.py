@@ -313,10 +313,16 @@ class CombinedFootballBettingModel:
                 else:
                     draw_prob += prob
 
-        if (home_win_prob + away_win_prob + draw_prob) > 0:
-            home_win_prob /= (home_win_prob + away_win_prob + draw_prob)
-            away_win_prob /= (home_win_prob + away_win_prob + draw_prob)
-            draw_prob /= (home_win_prob + away_win_prob + draw_prob)
+        # --- Hotfix: Boost draw probability ---
+        draw_bias = 1.5  # Adjust this factor to increase draw chance (e.g., 1.2 increases it by 20%)
+        draw_prob *= draw_bias
+
+        # Normalize the probabilities so that they add up to 1 (100%)
+        total = home_win_prob + away_win_prob + draw_prob
+        if total > 0:
+            home_win_prob /= total
+            away_win_prob /= total
+            draw_prob /= total
 
         # --- Blend Market Sentiment ---
         # Compute model probabilities from our calculation:
