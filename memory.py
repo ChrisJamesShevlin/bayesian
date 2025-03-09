@@ -313,11 +313,8 @@ class CombinedFootballBettingModel:
                 else:
                     draw_prob += prob
 
-        # --- Hotfix: Boost draw probability ---
-        draw_bias = 1.5  # Adjust this factor to increase draw chance (e.g., 1.2 increases it by 20%)
-        draw_prob *= draw_bias
-
-        # Normalize the probabilities so that they add up to 1 (100%)
+        # Removed the draw bias (previously draw_prob was multiplied by 1.5).
+        # Now, we simply normalize the probabilities.
         total = home_win_prob + away_win_prob + draw_prob
         if total > 0:
             home_win_prob /= total
@@ -325,7 +322,7 @@ class CombinedFootballBettingModel:
             draw_prob /= total
 
         # --- Blend Market Sentiment ---
-        # Compute model probabilities from our calculation:
+        # Model probabilities from our calculation:
         model_home_prob = home_win_prob
         model_draw_prob = draw_prob
         model_away_prob = away_win_prob
@@ -334,6 +331,8 @@ class CombinedFootballBettingModel:
         market_home_prob = 1 / live_odds_home if live_odds_home > 0 else 0
         market_draw_prob = 1 / live_odds_draw if live_odds_draw > 0 else 0
         market_away_prob = 1 / live_odds_away if live_odds_away > 0 else 0
+
+        # Normalize market probabilities to remove market overround
         total_market = market_home_prob + market_draw_prob + market_away_prob
         if total_market > 0:
             market_home_prob /= total_market
@@ -345,6 +344,8 @@ class CombinedFootballBettingModel:
         final_home_prob = blend_weight * model_home_prob + (1 - blend_weight) * market_home_prob
         final_draw_prob = blend_weight * model_draw_prob + (1 - blend_weight) * market_draw_prob
         final_away_prob = blend_weight * model_away_prob + (1 - blend_weight) * market_away_prob
+
+        # Normalize final probabilities to ensure they sum to 1
         total_final = final_home_prob + final_draw_prob + final_away_prob
         if total_final > 0:
             final_home_prob /= total_final
