@@ -104,10 +104,10 @@ class CombinedFootballBettingModel:
         }
 
     # ----- Bayesian Predictive Goal Probability -----
-    def bayesian_goal_probability(self, expected_lambda, k, r=3):
+    def bayesian_goal_probability(self, expected_lambda, k, r=2):
         """
         Bayesian predictive probability for scoring k goals.
-        With a Gamma prior on λ (shape parameter r), the predictive distribution becomes Negative Binomial:
+        Using a Negative Binomial with Gamma prior (shape parameter r=2 here).
             P(k) = comb(k+r-1, k) * (r/(r+expected_lambda))^r * (expected_lambda/(r+expected_lambda))^k
         """
         p = r / (r + expected_lambda)
@@ -116,11 +116,11 @@ class CombinedFootballBettingModel:
     def time_decay_adjustment(self, lambda_xg, elapsed_minutes, in_game_xg):
         """
         Applies a time-decay factor to the expected goals for the remainder.
-        Uses a gentler decay factor.
+        Lowered the decay rate from 0.005 to 0.003 and raised the floor to 0.5.
         """
         remaining_minutes = 90 - elapsed_minutes
-        base_decay = exp(-0.005 * elapsed_minutes)
-        base_decay = max(base_decay, 0.4)
+        base_decay = exp(-0.003 * elapsed_minutes)
+        base_decay = max(base_decay, 0.5)
         if remaining_minutes < 10:
             base_decay *= 0.75
         adjusted_lambda = lambda_xg * base_decay
@@ -212,7 +212,7 @@ class CombinedFootballBettingModel:
         fraction_remaining = max(0.0, remaining_minutes / 90.0)
 
         # --- Next Correct Scoreline Insights using Bayesian Prediction ---
-        # Calculate the lambda values for the remaining match using in-play and pre-game metrics.
+        # Calculate the lambda values for the remainder of the match.
         home_xg_remainder = home_xg * fraction_remaining
         away_xg_remainder = away_xg * fraction_remaining
 
@@ -226,6 +226,7 @@ class CombinedFootballBettingModel:
         lambda_home = (lambda_home * 0.85) + (pm_component_home * 0.15 * fraction_remaining)
         lambda_away = (lambda_away * 0.85) + (pm_component_away * 0.15 * fraction_remaining)
 
+        # Apply in-play metrics
         lambda_home *= 1 + ((home_possession - 50) / 200) * fraction_remaining
         lambda_away *= 1 + ((away_possession - 50) / 200) * fraction_remaining
 
@@ -244,11 +245,12 @@ class CombinedFootballBettingModel:
         lambda_away *= 1 + ((away_corners - 4) / 50) * fraction_remaining
 
         # Calculate the probability distribution over final scorelines
-        # (by considering additional goals from 0 to 3 for each team)
+        # Now from 0–5 additional goals for each side.
         score_probabilities = {}
-        for gh in range(4):
-            for ga in range(4):
-                prob = self.bayesian_goal_probability(lambda_home, gh) * self.bayesian_goal_probability(lambda_away, ga)
+        for gh in range(6):  # 0 through 5 additional home goals
+            for ga in range(6):  # 0 through 5 additional away goals
+                prob = (self.bayesian_goal_probability(lambda_home, gh) *
+                        self.bayesian_goal_probability(lambda_away, ga))
                 final_score = (home_goals + gh, away_goals + ga)
                 score_probabilities[final_score] = score_probabilities.get(final_score, 0) + prob
 
@@ -257,8 +259,10 @@ class CombinedFootballBettingModel:
 
         lines_insight = []
         lines_insight.append("--- Next Correct Scoreline Insights ---")
+
+        # Show the top 5 likely scorelines
         if sorted_scores:
-            top_scores = sorted_scores[:2]  # Get the two most likely scorelines
+            top_scores = sorted_scores[:5]
             for score, prob in top_scores:
                 lines_insight.append(f"Scoreline {score[0]}-{score[1]}: {prob:.2%}")
         else:
@@ -358,6 +362,7 @@ class CombinedFootballBettingModel:
         def clamp_to_10pct(value):
             return min(value, account_balance * 0.10)
 
+        # Betting logic for Home
         if fair_odds_home > live_odds_home:
             edge = (fair_odds_home - live_odds_home) / fair_odds_home
             liability = account_balance * self.dynamic_kelly(edge)
@@ -373,6 +378,7 @@ class CombinedFootballBettingModel:
         else:
             lines_mo.append("Home: No clear edge.")
 
+        # Betting logic for Draw
         if fair_odds_draw > live_odds_draw:
             edge = (fair_odds_draw - live_odds_draw) / fair_odds_draw
             liability = account_balance * self.dynamic_kelly(edge)
@@ -388,6 +394,7 @@ class CombinedFootballBettingModel:
         else:
             lines_mo.append("Draw: No clear edge.")
 
+        # Betting logic for Away
         if fair_odds_away > live_odds_away:
             edge = (fair_odds_away - live_odds_away) / fair_odds_away
             liability = account_balance * self.dynamic_kelly(edge)
@@ -403,6 +410,7 @@ class CombinedFootballBettingModel:
         else:
             lines_mo.append("Away: No clear edge.")
 
+        # Combine the lines for output
         combined_lines = []
         combined_lines.extend(lines_insight)
         combined_lines.append("")
