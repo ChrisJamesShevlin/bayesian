@@ -34,8 +34,10 @@ class ScorelineLayModel:
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
-        # Input fields relevant to scoreline probability and lay betting.
-        # Loss recovery is reintroduced via the "Cumulative Loss" field.
+        # Input fields.
+        # Loss recovery is enabled via "Cumulative Loss".
+        # New fields: Live Odds for Home Win, Draw, Away Win.
+        # Also "Market Odds for Current Scoreline" for blending, plus selected scoreline inputs.
         self.fields = {
             "Home Avg Goals Scored": tk.DoubleVar(),
             "Home Avg Goals Conceded": tk.DoubleVar(),
@@ -58,10 +60,13 @@ class ScorelineLayModel:
             "Away Corners": tk.DoubleVar(),
             "Locked Profit": tk.DoubleVar(),          # Profit already secured
             "Account Balance": tk.DoubleVar(),
-            "Cumulative Loss": tk.DoubleVar(),        # New field for loss recovery
-            "Market Odds for Current Scoreline": tk.DoubleVar(),  # For blending the current score probability
+            "Cumulative Loss": tk.DoubleVar(),        # For loss recovery
+            "Market Odds for Current Scoreline": tk.DoubleVar(),  # For blending current score probability
+            "Live Odds Home Win": tk.DoubleVar(),      # Live match odds for Home Win
+            "Live Odds Draw": tk.DoubleVar(),          # Live match odds for Draw
+            "Live Odds Away Win": tk.DoubleVar(),      # Live match odds for Away Win
             "Selected Scoreline": tk.StringVar(),      # e.g., "0-1"
-            "Live Odds for Selected Scoreline": tk.DoubleVar()   # Market odds for that scoreline
+            "Live Odds for Selected Scoreline": tk.DoubleVar()   # Live odds for that selected scoreline
         }
         row = 0
         for field, var in self.fields.items():
@@ -80,7 +85,7 @@ class ScorelineLayModel:
         row += 1
 
         # Output area for insights and recommendations
-        self.output_text = tk.Text(self.scrollable_frame, height=25, wrap="word")
+        self.output_text = tk.Text(self.scrollable_frame, height=30, wrap="word")
         self.output_text.grid(row=row, column=0, columnspan=2, pady=10)
         self.output_text.tag_configure("insight", foreground="green")
         self.output_text.tag_configure("lay", foreground="red")
@@ -102,7 +107,7 @@ class ScorelineLayModel:
             "away_possession": []
         }
 
-    # Bayesian predictive probability using a Negative Binomial with Gamma prior
+    # Bayesian predictive probability using Negative Binomial with Gamma prior
     def bayesian_goal_probability(self, expected_lambda, k, r=2):
         p = r / (r + expected_lambda)
         return comb(k + r - 1, k) * (p ** r) * ((1 - p) ** k)
@@ -147,7 +152,7 @@ class ScorelineLayModel:
             self.history[key].pop(0)
         self.history[key].append(value)
 
-    # Use 1/8 Kelly (0.125 × edge)
+    # Use 1/8 Kelly (0.125 * edge)
     def dynamic_kelly(self, edge):
         return max(0, 0.125 * edge)
 
@@ -181,10 +186,13 @@ class ScorelineLayModel:
         away_corners = f["Away Corners"].get()
         locked_profit = f["Locked Profit"].get()
         account_balance = f["Account Balance"].get()
+        cumulative_loss = f["Cumulative Loss"].get()
         market_odds_current = f["Market Odds for Current Scoreline"].get()
+        live_odds_home_win = f["Live Odds Home Win"].get()
+        live_odds_draw = f["Live Odds Draw"].get()
+        live_odds_away_win = f["Live Odds Away Win"].get()
         selected_score_str = f["Selected Scoreline"].get().strip()
         live_selected_odds = f["Live Odds for Selected Scoreline"].get()
-        cumulative_loss = f["Cumulative Loss"].get()
 
         # Effective balance is account balance minus locked profit.
         effective_balance = account_balance - locked_profit
@@ -255,13 +263,46 @@ class ScorelineLayModel:
             model_current_prob = score_probabilities[current_score]
             blended_prob = 0.7 * model_current_prob + 0.3 * market_current_prob
             score_probabilities[current_score] = blended_prob
-            # Renormalize the probability distribution:
             total_prob = sum(score_probabilities.values())
             if total_prob > 0:
                 for key in score_probabilities:
                     score_probabilities[key] /= total_prob
 
-        # --- Prepare Insights ---
+        # --- Match Odds Aggregation & 70/30 Blending ---
+        home_win_prob = sum(prob for (h, a), prob in score_probabilities.items() if h > a)
+        draw_prob = sum(prob for (h, a), prob in score_probabilities.items() if h == a)
+        away_win_prob = sum(prob for (h, a), prob in score_probabilities.items() if h < a)
+        
+        # Market implied probabilities from live match odds:
+        market_home_prob = 1 / live_odds_home_win if live_odds_home_win > 0 else 0
+        market_draw_prob = 1 / live_odds_draw if live_odds_draw > 0 else 0
+        market_away_prob = 1 / live_odds_away_win if live_odds_away_win > 0 else 0
+        
+        blended_home_prob = 0.7 * home_win_prob + 0.3 * market_home_prob
+        blended_draw_prob = 0.7 * draw_prob + 0.3 * market_draw_prob
+        blended_away_prob = 0.7 * away_win_prob + 0.3 * market_away_prob
+
+        blended_fair_home = 1 / blended_home_prob if blended_home_prob > 0 else float('inf')
+        blended_fair_draw = 1 / blended_draw_prob if blended_draw_prob > 0 else float('inf')
+        blended_fair_away = 1 / blended_away_prob if blended_away_prob > 0 else float('inf')
+
+        # --- Match Odds Betting Insights ---
+        # These insights simply display live odds vs. blended fair odds.
+        lines_match = ["--- Match Odds Betting Insights ---"]
+        lines_match.append(f"Home Win: Fair Odds {blended_fair_home:.2f} | Live Odds {live_odds_home_win:.2f}")
+        lines_match.append(f"Draw: Fair Odds {blended_fair_draw:.2f} | Live Odds {live_odds_draw:.2f}")
+        lines_match.append(f"Away Win: Fair Odds {blended_fair_away:.2f} | Live Odds {live_odds_away_win:.2f}")
+        if live_odds_home_win > 0 and blended_fair_home > live_odds_home_win:
+            edge = (blended_fair_home - live_odds_home_win) / blended_fair_home
+            lines_match.append(f"--> Value to Lay Home Win (Edge: {edge:.2%})")
+        if live_odds_draw > 0 and blended_fair_draw > live_odds_draw:
+            edge = (blended_fair_draw - live_odds_draw) / blended_fair_draw
+            lines_match.append(f"--> Value to Lay Draw (Edge: {edge:.2%})")
+        if live_odds_away_win > 0 and blended_fair_away > live_odds_away_win:
+            edge = (blended_fair_away - live_odds_away_win) / blended_fair_away
+            lines_match.append(f"--> Value to Lay Away Win (Edge: {edge:.2%})")
+
+        # --- Scoreline Probability Insights ---
         sorted_scores = sorted(score_probabilities.items(), key=lambda item: item[1], reverse=True)
         lines_insight = ["--- Scoreline Probability Insights ---"]
         if sorted_scores:
@@ -281,29 +322,25 @@ class ScorelineLayModel:
         if selected_score and selected_score in score_probabilities:
             selected_prob = score_probabilities[selected_score]
             fair_odds_selected = 1/selected_prob if selected_prob > 0 else float('inf')
-            lines_selected.append(
-                f"Selected Scoreline {selected_score[0]}-{selected_score[1]}: Probability: {selected_prob:.2%}, Fair Odds: {fair_odds_selected:.2f}"
-            )
-            # Recommend a lay bet if the model's fair odds are higher than the live odds
+            lines_selected.append(f"Selected Scoreline {selected_score[0]}-{selected_score[1]}: Probability: {selected_prob:.2%}, Fair Odds: {fair_odds_selected:.2f}")
             if live_selected_odds > 0 and fair_odds_selected > live_selected_odds:
                 edge = (fair_odds_selected - live_selected_odds) / fair_odds_selected
-                # Incorporate loss recovery: recovery multiplier based on cumulative loss
                 recovery_factor = 0.5
                 recovery_multiplier = 1 + (abs(cumulative_loss) / account_balance) * recovery_factor if account_balance > 0 else 1
                 base_liability = effective_balance * self.dynamic_kelly(edge)
                 liability = base_liability * recovery_multiplier
-                liability = min(liability, effective_balance * 0.10)  # Clamp liability to 10% of effective balance
+                liability = min(liability, effective_balance * 0.10)
                 lay_stake = liability / (live_selected_odds - 1) if (live_selected_odds - 1) > 0 else 0
-                lines_selected.append(
-                    f"Recommended Lay Bet: Edge: {edge:.2%}, Liability: {liability:.2f}, Lay Stake: {lay_stake:.2f}"
-                )
+                lines_selected.append(f"Recommended Lay Bet: Edge: {edge:.2%}, Liability: {liability:.2f}, Lay Stake: {lay_stake:.2f}")
             else:
-                lines_selected.append("No lay edge found (fair odds not higher than live odds).")
+                lines_selected.append("No lay edge found for selected scoreline (fair odds not higher than live odds).")
         else:
             lines_selected.append("Selected scoreline not found in calculated probabilities.")
 
-        # Combine all output sections
+        # --- Combine and Output ---
         combined_lines = []
+        combined_lines.extend(lines_match)
+        combined_lines.append("")
         combined_lines.extend(lines_insight)
         combined_lines.append("")
         combined_lines.extend(lines_selected)
