@@ -5,7 +5,7 @@ from math import exp, comb
 class ScorelineLayModel:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scoreline Lay Model")
+        self.root.title("Odds Apex")
         self.create_widgets()
         # History for dynamic updating (running xG averages, etc.)
         self.history = {
@@ -58,9 +58,7 @@ class ScorelineLayModel:
             "Away Opp Box Touches": tk.DoubleVar(),
             "Home Corners": tk.DoubleVar(),
             "Away Corners": tk.DoubleVar(),
-            "Locked Profit": tk.DoubleVar(),          # Profit already secured
             "Account Balance": tk.DoubleVar(),
-            "Cumulative Loss": tk.DoubleVar(),        # For loss recovery
             "Market Odds for Current Scoreline": tk.DoubleVar(),  # For blending current score probability
             "Selected Scoreline": tk.StringVar(),      # e.g., "0-1"
             "Live Odds for Selected Scoreline": tk.DoubleVar()   # Live odds for that selected scoreline
@@ -181,15 +179,13 @@ class ScorelineLayModel:
         away_op_box_touches = f["Away Opp Box Touches"].get()
         home_corners = f["Home Corners"].get()
         away_corners = f["Away Corners"].get()
-        locked_profit = f["Locked Profit"].get()
         account_balance = f["Account Balance"].get()
-        cumulative_loss = f["Cumulative Loss"].get()
         market_odds_current = f["Market Odds for Current Scoreline"].get()
         selected_score_str = f["Selected Scoreline"].get().strip()
         live_selected_odds = f["Live Odds for Selected Scoreline"].get()
 
-        # Effective balance: account balance minus locked profit.
-        effective_balance = account_balance - locked_profit
+        # Effective balance now equals the account balance
+        effective_balance = account_balance
         if effective_balance < 0:
             effective_balance = 0
 
@@ -298,10 +294,8 @@ class ScorelineLayModel:
             )
             if live_selected_odds > 0 and fair_odds_selected > live_selected_odds:
                 edge = (fair_odds_selected - live_selected_odds) / fair_odds_selected
-                recovery_factor = 0.5
-                recovery_multiplier = 1 + (abs(cumulative_loss) / account_balance) * recovery_factor if account_balance > 0 else 1
                 base_liability = effective_balance * self.dynamic_kelly(edge)
-                liability = base_liability * recovery_multiplier
+                liability = base_liability  # No recovery multiplier used now
                 liability = min(liability, effective_balance * 0.10)
                 lay_stake = liability / (live_selected_odds - 1) if (live_selected_odds - 1) > 0 else 0
                 lines_selected.append(
