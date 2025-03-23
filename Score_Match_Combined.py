@@ -35,8 +35,7 @@ class ScorelineLayModel:
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
-        # Input fields. 
-        # ADDED: "Live Odds Home", "Live Odds Draw", "Live Odds Away" for match odds.
+        # Input fields
         self.fields = {
             "Home Avg Goals Scored": tk.DoubleVar(),
             "Home Avg Goals Conceded": tk.DoubleVar(),
@@ -58,11 +57,11 @@ class ScorelineLayModel:
             "Home Corners": tk.DoubleVar(),
             "Away Corners": tk.DoubleVar(),
             "Account Balance": tk.DoubleVar(),
-            "Market Odds for Current Scoreline": tk.DoubleVar(),  # For blending current score probability
-            "Selected Scoreline": tk.StringVar(),      # e.g., "0-1"
-            "Live Odds for Selected Scoreline": tk.DoubleVar(),   # Live odds for that selected scoreline
+            "Market Odds for Current Scoreline": tk.DoubleVar(),
+            "Selected Scoreline": tk.StringVar(),
+            "Live Odds for Selected Scoreline": tk.DoubleVar(),
 
-            # NEW: Fields for match odds
+            # Match odds
             "Live Odds Home": tk.DoubleVar(),
             "Live Odds Draw": tk.DoubleVar(),
             "Live Odds Away": tk.DoubleVar()
@@ -88,9 +87,14 @@ class ScorelineLayModel:
         # Output area for insights and recommendations
         self.output_text = tk.Text(self.scrollable_frame, height=30, wrap="word")
         self.output_text.grid(row=row, column=0, columnspan=2, pady=10)
+
+        # Configure text tags for coloring
         self.output_text.tag_configure("insight", foreground="green")
         self.output_text.tag_configure("lay", foreground="red")
         self.output_text.tag_configure("normal", foreground="black")
+        # NEW TAG for 'Back' lines in blue
+        self.output_text.tag_configure("back", foreground="blue")
+
         self.output_text.config(state="disabled")
 
     def reset_fields(self):
@@ -213,7 +217,7 @@ class ScorelineLayModel:
         fraction_remaining = max(0.0, remaining_minutes / 90.0)
 
         ##############################################################################
-        # MATCH ODDS CALCULATION (updated to blend model and market probabilities)
+        # MATCH ODDS CALCULATION (with 70/30 blend)
         ##############################################################################
         lines_mo = ["--- Match Odds Calculation ---"]
 
@@ -221,7 +225,7 @@ class ScorelineLayModel:
         home_xg_remainder_mo = home_xg * fraction_remaining
         away_xg_remainder_mo = away_xg * fraction_remaining
 
-        # Time decay for match odds: using the same function/time decay as correct score for consistency
+        # Time decay
         lambda_home_mo = self.time_decay_adjustment(home_xg_remainder_mo, elapsed_minutes, in_game_home_xg)
         lambda_away_mo = self.time_decay_adjustment(away_xg_remainder_mo, elapsed_minutes, in_game_away_xg)
 
@@ -229,7 +233,7 @@ class ScorelineLayModel:
                                                                       lambda_home_mo, lambda_away_mo,
                                                                       elapsed_minutes)
 
-        # pm_component, just like the main approach
+        # pm_component
         pm_component_home = (home_avg_goals_scored / max(0.75, away_avg_goals_conceded))
         pm_component_away = (away_avg_goals_scored / max(0.75, home_avg_goals_conceded))
         lambda_home_mo = (lambda_home_mo * 0.85) + (pm_component_home * 0.15 * fraction_remaining)
@@ -259,7 +263,7 @@ class ScorelineLayModel:
         lambda_home_mo = (lambda_home_mo * 0.7) + (dynamic_lambda_home_mo * 0.3)
         lambda_away_mo = (lambda_away_mo * 0.7) + (dynamic_lambda_away_mo * 0.3)
 
-        # Now compute home/draw/away probabilities with r=3
+        # Compute probabilities (r=3)
         home_win_prob = 0
         away_win_prob = 0
         draw_prob = 0
@@ -280,30 +284,29 @@ class ScorelineLayModel:
             away_win_prob /= total_prob_mo
             draw_prob /= total_prob_mo
 
-        # Convert live odds to market implied probabilities for match odds
+        # Convert live odds to market implied probabilities
         market_home_prob = (1 / live_odds_home) if live_odds_home > 0 else 0
         market_draw_prob = (1 / live_odds_draw) if live_odds_draw > 0 else 0
         market_away_prob = (1 / live_odds_away) if live_odds_away > 0 else 0
-
         market_total = market_home_prob + market_draw_prob + market_away_prob
         if market_total > 0:
             market_home_prob /= market_total
             market_draw_prob /= market_total
             market_away_prob /= market_total
 
-        # Blend model and market probabilities using a 70/30 ratio
+        # Blend model vs. market (70/30)
         blended_home_prob = 0.7 * home_win_prob + 0.3 * market_home_prob
         blended_draw_prob = 0.7 * draw_prob + 0.3 * market_draw_prob
         blended_away_prob = 0.7 * away_win_prob + 0.3 * market_away_prob
 
-        # Normalize the blended probabilities
+        # Normalize blended
         blended_total = blended_home_prob + blended_draw_prob + blended_away_prob
         if blended_total > 0:
             blended_home_prob /= blended_total
             blended_draw_prob /= blended_total
             blended_away_prob /= blended_total
 
-        # Compute fair odds from blended probabilities
+        # Fair odds from blended
         fair_odds_home = 1 / blended_home_prob if blended_home_prob > 0 else float('inf')
         fair_odds_draw = 1 / blended_draw_prob if blended_draw_prob > 0 else float('inf')
         fair_odds_away = 1 / blended_away_prob if blended_away_prob > 0 else float('inf')
@@ -315,7 +318,7 @@ class ScorelineLayModel:
         def clamp_to_10pct(val):
             return min(val, effective_balance * 0.10)
 
-        # For each outcome, compare fair vs. live to see if Lay or Back is recommended
+        # Compare fair vs. live for each outcome
         # 1) Home
         if fair_odds_home > live_odds_home > 1:
             edge = (fair_odds_home - live_odds_home) / fair_odds_home
@@ -365,11 +368,11 @@ class ScorelineLayModel:
             lines_mo.append("Away: No clear edge.")
 
         ##############################################################################
-        # SCORELINE PROBABILITY CALCULATION (original code, unchanged except for blending current scoreline)
+        # SCORELINE PROBABILITY CALCULATION
         ##############################################################################
         lines_exp_goals = ["--- Expected Goals Betting Insights ---"]
 
-        # Compute fraction of xG left for the remainder
+        # Fraction of xG left
         home_xg_remainder = home_xg * fraction_remaining
         away_xg_remainder = away_xg * fraction_remaining
 
@@ -399,7 +402,7 @@ class ScorelineLayModel:
         lambda_home *= 1 + ((home_corners - 4) / 50) * fraction_remaining
         lambda_away *= 1 + ((away_corners - 4) / 50) * fraction_remaining
 
-        # Incorporate momentum with historical xG
+        # Momentum with historical xG
         blend_weight = 0.7
         dynamic_lambda_home = self.dynamic_expected_lambda('home')
         dynamic_lambda_away = self.dynamic_expected_lambda('away')
@@ -415,7 +418,7 @@ class ScorelineLayModel:
         lines_exp_goals.append(f"Expected Goals Left - Away: {expected_goals_away:.2f}")
         lines_exp_goals.append(f"Total Expected Goals Left: {total_expected_goals:.2f}")
 
-        # Build Dictionary of Final Score Probabilities
+        # Build dictionary of final score probabilities
         score_probabilities = {}
         for gh in range(6):
             for ga in range(6):
@@ -491,16 +494,19 @@ class ScorelineLayModel:
         combined_lines.extend(lines_selected)
         combined_lines.append("")
 
-        # Display
         self.output_text.config(state="normal")
         self.output_text.delete("1.0", tk.END)
+
         for line in combined_lines:
             if line.startswith("---"):
                 self.output_text.insert(tk.END, line + "\n", "insight")
             elif "Lay" in line:
                 self.output_text.insert(tk.END, line + "\n", "lay")
+            elif "Back" in line:  # <-- New check for "Back"
+                self.output_text.insert(tk.END, line + "\n", "back")
             else:
                 self.output_text.insert(tk.END, line + "\n", "normal")
+
         self.output_text.config(state="disabled")
 
 if __name__ == "__main__":
