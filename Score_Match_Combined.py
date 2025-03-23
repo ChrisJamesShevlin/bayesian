@@ -213,12 +213,11 @@ class ScorelineLayModel:
         fraction_remaining = max(0.0, remaining_minutes / 90.0)
 
         ##############################################################################
-        # MATCH ODDS CALCULATION (added in the same style as the rest)
+        # MATCH ODDS CALCULATION (updated to blend model and market probabilities)
         ##############################################################################
         lines_mo = ["--- Match Odds Calculation ---"]
 
-        # We'll compute a separate in-play lambda for match odds, using the same time_decay_adjustment
-        # but with r=3 in the Bayesian step (a common approach for match odds).
+        # Compute remaining xG for match odds
         home_xg_remainder_mo = home_xg * fraction_remaining
         away_xg_remainder_mo = away_xg * fraction_remaining
 
@@ -281,10 +280,33 @@ class ScorelineLayModel:
             away_win_prob /= total_prob_mo
             draw_prob /= total_prob_mo
 
-        # Compute fair odds
-        fair_odds_home = (1 / home_win_prob) if home_win_prob > 0 else float('inf')
-        fair_odds_draw = (1 / draw_prob) if draw_prob > 0 else float('inf')
-        fair_odds_away = (1 / away_win_prob) if away_win_prob > 0 else float('inf')
+        # Convert live odds to market implied probabilities for match odds
+        market_home_prob = (1 / live_odds_home) if live_odds_home > 0 else 0
+        market_draw_prob = (1 / live_odds_draw) if live_odds_draw > 0 else 0
+        market_away_prob = (1 / live_odds_away) if live_odds_away > 0 else 0
+
+        market_total = market_home_prob + market_draw_prob + market_away_prob
+        if market_total > 0:
+            market_home_prob /= market_total
+            market_draw_prob /= market_total
+            market_away_prob /= market_total
+
+        # Blend model and market probabilities using a 70/30 ratio
+        blended_home_prob = 0.7 * home_win_prob + 0.3 * market_home_prob
+        blended_draw_prob = 0.7 * draw_prob + 0.3 * market_draw_prob
+        blended_away_prob = 0.7 * away_win_prob + 0.3 * market_away_prob
+
+        # Normalize the blended probabilities
+        blended_total = blended_home_prob + blended_draw_prob + blended_away_prob
+        if blended_total > 0:
+            blended_home_prob /= blended_total
+            blended_draw_prob /= blended_total
+            blended_away_prob /= blended_total
+
+        # Compute fair odds from blended probabilities
+        fair_odds_home = 1 / blended_home_prob if blended_home_prob > 0 else float('inf')
+        fair_odds_draw = 1 / blended_draw_prob if blended_draw_prob > 0 else float('inf')
+        fair_odds_away = 1 / blended_away_prob if blended_away_prob > 0 else float('inf')
 
         lines_mo.append(f"Fair Odds - Home: {fair_odds_home:.2f}, Draw: {fair_odds_draw:.2f}, Away: {fair_odds_away:.2f}")
         lines_mo.append(f"Live Odds - Home: {live_odds_home:.2f}, Draw: {live_odds_draw:.2f}, Away: {live_odds_away:.2f}")
@@ -343,7 +365,7 @@ class ScorelineLayModel:
             lines_mo.append("Away: No clear edge.")
 
         ##############################################################################
-        # SCORELINE PROBABILITY CALCULATION (original code, unchanged)
+        # SCORELINE PROBABILITY CALCULATION (original code, unchanged except for blending current scoreline)
         ##############################################################################
         lines_exp_goals = ["--- Expected Goals Betting Insights ---"]
 
